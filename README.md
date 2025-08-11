@@ -21,6 +21,147 @@
 
 ## 🧠 DFT Loss 工作原理
 
+## **1. SFT 的标准公式与梯度**
+
+### **1.1 SFT损失函数**
+
+标准的 SFT 损失为 token-level 交叉熵损失（以一个“专家数据对”分布 D 为期望）：
+
+![SFT Loss](https://latex.codecogs.com/svg.image?L_{\mathrm{SFT}}(\theta)&space;=&space;\mathbb{E}_{(x,&space;y^*)&space;\sim&space;\mathcal{D}}&space;\left[&space;-\log&space;\pi_\theta(y^*|x)&space;\right])
+
+- $x$：输入（如问题、指令）
+- $y^*$：专家答案（ground-truth 标签）
+- ![](https://latex.codecogs.com/svg.inline?\pi_\theta(y^*|x))：模型参数 ![](https://latex.codecogs.com/svg.inline?\theta) 下，输出 ![](https://latex.codecogs.com/svg.inline?y^*) 的概率
+
+### **1.2 SFT的梯度**
+
+对$\theta$求梯度：
+
+![SFT Gradient](https://latex.codecogs.com/svg.image?\nabla_\theta&space;L_{\mathrm{SFT}}(\theta)&space;=&space;\mathbb{E}_{(x,&space;y^*)&space;\sim&space;\mathcal{D}}&space;\left[-\nabla_\theta\log&space;\pi_\theta(y^*|x)\right])
+
+---
+
+## **2. RL 策略梯度的标准形式**
+
+RL的目标是最大化期望奖励：
+
+![RL Objective](https://latex.codecogs.com/svg.image?J(\theta)&space;=&space;\mathbb{E}_{x&space;\sim&space;\mathcal{D}_x,\,&space;y&space;\sim&space;\pi_\theta(\cdot|x)}&space;[&space;r(x,&space;y)&space;])
+
+- $r(x, y)$：奖励函数，衡量$(x, y)$的好坏
+
+其**策略梯度**为：
+
+![Policy Gradient](https://latex.codecogs.com/svg.image?\nabla_\theta&space;J(\theta)&space;=&space;\mathbb{E}_{x&space;\sim&space;\mathcal{D}_x,\,&space;y&space;\sim&space;\pi_\theta(\cdot|x)}&space;[&space;\nabla_\theta&space;\log&space;\pi_\theta(y|x)&space;\cdot&space;r(x,&space;y)&space;])
+
+---
+
+## **3. 用重要性采样把SFT的梯度写成RL形式**
+
+### **3.1 重新写SFT梯度**
+
+我们希望把 SFT 梯度写成“采样于 $\pi_\theta$ 并带权重”的形式。
+
+**关键技巧：** 重要性采样
+
+![Importance Sampling](https://latex.codecogs.com/svg.image?\mathbb{E}_{y^*&space;\sim&space;p^*}&space;[f(y^*)]&space;=&space;\mathbb{E}_{y&space;\sim&space;\pi_\theta}&space;\left[&space;\frac{p^*(y)}{\pi_\theta(y)}&space;f(y)&space;\right])
+
+在 SFT 中，可写为：
+
+![SFT Gradient Rewritten](https://latex.codecogs.com/svg.image?\nabla_\theta&space;L_{\mathrm{SFT}}(\theta)&space;=&space;\mathbb{E}_{x&space;\sim&space;\mathcal{D}_x,\,&space;y&space;\sim&space;\pi_\theta(\cdot|x)}&space;\left[&space;\frac{1[y&space;=&space;y^*]}{\pi_\theta(y|x)}&space;\cdot&space;(&space;-\nabla_\theta&space;\log&space;\pi_\theta(y|x)&space;)&space;\right])
+
+- $1[y = y^*]$：指示函数，仅当生成结果等于专家答案时为 1
+
+---
+
+### **3.2 重新整理为RL策略梯度结构**
+
+定义：
+
+- **隐式奖励**：![r(x,y)](https://latex.codecogs.com/svg.inline?r(x,%20y)%20=%20\mathbb{1}[y%20=%20y^*])
+- **重要性权重**：![w(y|x)](https://latex.codecogs.com/svg.inline?w(y|x)%20=%20\frac{1}{\pi_\theta(y|x)})
+
+则 SFT 梯度变为：
+
+![SFT as RL](https://latex.codecogs.com/svg.image?\nabla_\theta&space;L_{\mathrm{SFT}}(\theta)&space;=&space;-&space;\mathbb{E}_{x&space;\sim&space;\mathcal{D}_x,\,&space;y&space;\sim&space;\pi_\theta(\cdot|x)}&space;\left[&space;w(y|x)&space;\cdot&space;r(x,&space;y)&space;\cdot&space;\nabla_\theta&space;\log&space;\pi_\theta(y|x)&space;\right])
+
+即：SFT 等价于一种特殊形式的 RL，其奖励稀疏且受 $1/\pi_\theta$ 放大。
+
+---
+
+## **4. SFT的“隐式奖励问题”分析**
+
+- 奖励：只有生成 $y^*$ 时 $r=1$，否则为 0
+- 权重：$\frac{1}{\pi_\theta(y^*|x)}$，若模型初始认为 $y^*$ 概率很低，则梯度被剧烈放大
+
+👉 这会导致：
+- 梯度爆炸
+- 训练不稳定
+- 泛化能力下降
+
+---
+
+## **5. DFT的修正：消除 $1/\pi_\theta$ 的影响**
+
+**核心思想：**  
+乘上 $\pi_\theta(y^*|x)$ 抵消 $1/\pi_\theta(y^*|x)$ 的放大效应，使用 `stop-gradient` 避免反向传播干扰。
+
+### **5.1 修正后的梯度（DFT梯度）**
+
+![DFT Gradient](https://latex.codecogs.com/svg.image?\nabla_\theta&space;L_{\mathrm{DFT}}(\theta)&space;=&space;\mathbb{E}_{(x,&space;y^*)&space;\sim&space;\mathcal{D}}&space;\left[&space;-&space;\text{sg}(&space;\pi_\theta(y^*|x)&space;)&space;\cdot&space;\nabla_\theta&space;\log&space;\pi_\theta(y^*|x)&space;\right])
+
+- $\text{sg}(\cdot)$：stop-gradient 算子（不参与反向传播）
+
+### **5.2 反推DFT的损失函数**
+
+对应损失函数为：
+
+![DFT Loss](https://latex.codecogs.com/svg.image?L_{\mathrm{DFT}}(\theta)&space;=&space;\mathbb{E}_{(x,&space;y^*)&space;\sim&space;\mathcal{D}}&space;\left[&space;-\,&space;\text{sg}(&space;\pi_\theta(y^*|x)&space;)&space;\cdot&space;\log&space;\pi_\theta(y^*|x)&space;\right])
+
+### **5.3 Token-level DFT损失**
+
+推广到 token 序列：
+
+![Token-level DFT](https://latex.codecogs.com/svg.image?L_{\mathrm{DFT}}(\theta)&space;=&space;\mathbb{E}_{(x,&space;y^*)&space;\sim&space;\mathcal{D}}&space;\left[&space;-&space;\sum_{t=1}^{|y^*|}&space;\text{sg}(&space;\pi_\theta(y^*_t&space;|&space;y^*_{<t},&space;x)&space;)&space;\cdot&space;\log&space;\pi_\theta(y^*_t&space;|&space;y^*_{<t},&space;x)&space;\right])
+
+- $y^*_t$：第 $t$ 个 token
+- $y^*_{<t}$：前 $t-1$ 个 tokens
+
+---
+
+## **6. 推导总结流程回顾**
+
+1. **SFT 的交叉熵损失与梯度**
+2. **用重要性采样重写 SFT 梯度到策略分布 $\pi_\theta$ 上**
+3. **发现 SFT 等价于一个奖励稀疏、被 $1/\pi_\theta$ 放大的 RL 过程**
+4. **分析该放大导致训练不稳定**
+5. **提出 DFT：引入 $\text{sg}(\pi_\theta)$ 抵消放大，稳定训练**
+
+---
+
+## **最终公式总结**
+
+### SFT损失与梯度
+
+![SFT Loss](https://latex.codecogs.com/svg.image?L_{\mathrm{SFT}}(\theta)&space;=&space;\mathbb{E}_{(x,&space;y^*)&space;\sim&space;\mathcal{D}}&space;\left[&space;-\log&space;\pi_\theta(y^*|x)&space;\right])
+
+![SFT Grad](https://latex.codecogs.com/svg.image?\nabla_\theta&space;L_{\mathrm{SFT}}(\theta)&space;=&space;\mathbb{E}_{(x,&space;y^*)&space;\sim&space;\mathcal{D}}&space;\left[-\nabla_\theta\log&space;\pi_\theta(y^*|x)\right])
+
+### RL策略梯度
+
+![RL PG](https://latex.codecogs.com/svg.image?\nabla_\theta&space;J(\theta)&space;=&space;\mathbb{E}_{x&space;\sim&space;\mathcal{D}_x,\,&space;y&space;\sim&space;\pi_\theta(\cdot|x)}&space;[&space;\nabla_\theta&space;\log&space;\pi_\theta(y|x)&space;\cdot&space;r(x,&space;y)&space;])
+
+### 用重要性采样重写SFT梯度
+
+![SFT as IS](https://latex.codecogs.com/svg.image?\nabla_\theta&space;L_{\mathrm{SFT}}(\theta)&space;=&space;-&space;\mathbb{E}_{x&space;\sim&space;\mathcal{D}_x,\,&space;y&space;\sim&space;\pi_\theta(\cdot|x)}&space;\left[&space;\frac{1[y&space;=&space;y^*]}{\pi_\theta(y|x)}&space;\nabla_\theta&space;\log&space;\pi_\theta(y|x)&space;\right])
+
+### DFT损失（token-level，论文公式9）
+
+![DFT Final](https://latex.codecogs.com/svg.image?L_{\mathrm{DFT}}(\theta)&space;=&space;\mathbb{E}_{(x,&space;y^*)&space;\sim&space;\mathcal{D}}&space;\left[&space;-&space;\sum_{t=1}^{|y^*|}&space;\text{sg}(&space;\pi_\theta(y^*_t&space;|&space;y^*_{<t},&space;x)&space;)&space;\cdot&space;\log&space;\pi_\theta(y^*_t&space;|&space;y^*_{<t},&space;x)&space;\right])
+
+> 其中 $\text{sg}(\cdot)$ 表示 stop-gradient，权重不参与反向传播。
+
+
+
 DFT Loss的核心思想是：**让模型更关注它有把握学对的东西**。
 
 传统的交叉熵损失对所有Token一视同仁。而DFT通过一个`dft_alpha`参数来调整这一行为。其核心逻辑如下：
