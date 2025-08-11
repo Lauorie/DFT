@@ -1,6 +1,6 @@
 # Advanced Fine-Tuning Framework for LLMs with Differentiated Loss
 
-这是一个为大语言模型（LLMs）设计的高级、可扩展的微调框架。它基于 `transformers`、`deepspeed` 和 `torch` 构建，核心特色是实现了一种**差异化微调（Differentiated Fine-Tuning, DFT）**的自定义损失函数。该框架特别适合在多GPU环境下，使用大规模、混合任务的数据集对模型进行高效微调。
+![](log.png)
 
 ## ✨ 项目特色
 
