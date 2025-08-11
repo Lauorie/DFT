@@ -1,6 +1,6 @@
 # Advanced Fine-Tuning Framework for LLMs with Differentiated Loss
 
-![](log.png)
+![](loss.png)
 
 ## ✨ 项目特色
 
