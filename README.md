@@ -21,144 +21,198 @@
 
 ## 🧠 DFT Loss 工作原理
 
-## **1. SFT 的标准公式与梯度**
+## 1. SFT 的标准公式与梯度
 
-### **1.1 SFT损失函数**
+### 1.1 SFT损失函数
 
 标准的 SFT 损失为 token-level 交叉熵损失（以一个“专家数据对”分布 D 为期望）：
 
-![SFT Loss](https://latex.codecogs.com/svg.image?L_{\mathrm{SFT}}(\theta)&space;=&space;\mathbb{E}_{(x,&space;y^*)&space;\sim&space;\mathcal{D}}&space;\left[&space;-\log&space;\pi_\theta(y^*|x)&space;\right])
+<p align="center">
+  <img src="https://latex.codecogs.com/svg.latex?L_{\mathrm{SFT}}(\theta)%20=%20\mathbb{E}_{(x,%20y^*)%20\sim%20\mathcal{D}}%20\left[%20-\log%20\pi_\theta(y^*|x)%20\right]" alt="SFT Loss">
+</p>
 
-- $x$：输入（如问题、指令）
-- $y^*$：专家答案（ground-truth 标签）
-- ![](https://latex.codecogs.com/svg.inline?\pi_\theta(y^*|x))：模型参数 ![](https://latex.codecogs.com/svg.inline?\theta) 下，输出 ![](https://latex.codecogs.com/svg.inline?y^*) 的概率
+- <img src="https://latex.codecogs.com/svg.latex?x" style="vertical-align: middle;" alt="x">：输入（如问题、指令）
+- <img src="https://latex.codecogs.com/svg.latex?y^*" style="vertical-align: middle;" alt="y^*">：专家答案（ground-truth 标签）
+- <img src="https://latex.codecogs.com/svg.latex?\pi_\theta(y^*|x)" style="vertical-align: middle;" alt="πθ(y*|x)">：模型参数 <img src="https://latex.codecogs.com/svg.latex?\theta" style="vertical-align: middle;" alt="θ"> 下，输出 <img src="https://latex.codecogs.com/svg.latex?y^*" style="vertical-align: middle;" alt="y^*"> 的概率
 
-### **1.2 SFT的梯度**
+### 1.2 SFT的梯度
 
-对$\theta$求梯度：
+对 <img src="https://latex.codecogs.com/svg.latex?\theta" style="vertical-align: middle;" alt="θ"> 求梯度：
 
-![SFT Gradient](https://latex.codecogs.com/svg.image?\nabla_\theta&space;L_{\mathrm{SFT}}(\theta)&space;=&space;\mathbb{E}_{(x,&space;y^*)&space;\sim&space;\mathcal{D}}&space;\left[-\nabla_\theta\log&space;\pi_\theta(y^*|x)\right])
+<p align="center">
+  <img src="https://latex.codecogs.com/svg.latex?\nabla_\theta%20L_{\mathrm{SFT}}(\theta)%20=%20\mathbb{E}_{(x,%20y^*)%20\sim%20\mathcal{D}}%20\left[-\nabla_\theta\log%20\pi_\theta(y^*|x)\right]" alt="SFT Loss Gradient">
+</p>
 
 ---
 
-## **2. RL 策略梯度的标准形式**
+## 2. RL 策略梯度的标准形式
 
-RL的目标是最大化期望奖励：
+RL 的目标是最大化期望奖励：
 
-![RL Objective](https://latex.codecogs.com/svg.image?J(\theta)&space;=&space;\mathbb{E}_{x&space;\sim&space;\mathcal{D}_x,\,&space;y&space;\sim&space;\pi_\theta(\cdot|x)}&space;[&space;r(x,&space;y)&space;])
+<p align="center">
+  <img src="https://latex.codecogs.com/svg.latex?J(\theta)%20=%20\mathbb{E}_{x%20\sim%20\mathcal{D}_x,\,%20y%20\sim%20\pi_\theta(\cdot|x)}%20[%20r(x,%20y)%20]" alt="RL Objective">
+</p>
 
-- $r(x, y)$：奖励函数，衡量$(x, y)$的好坏
+- <img src="https://latex.codecogs.com/svg.latex?r(x,%20y)" style="vertical-align: middle;" alt="r(x, y)">：奖励函数，衡量 <img src="https://latex.codecogs.com/svg.latex?(x,%20y)" style="vertical-align: middle;" alt="(x, y)"> 的好坏
 
 其**策略梯度**为：
 
-![Policy Gradient](https://latex.codecogs.com/svg.image?\nabla_\theta&space;J(\theta)&space;=&space;\mathbb{E}_{x&space;\sim&space;\mathcal{D}_x,\,&space;y&space;\sim&space;\pi_\theta(\cdot|x)}&space;[&space;\nabla_\theta&space;\log&space;\pi_\theta(y|x)&space;\cdot&space;r(x,&space;y)&space;])
+<p align="center">
+  <img src="https://latex.codecogs.com/svg.latex?\nabla_\theta%20J(\theta)%20=%20\mathbb{E}_{x%20\sim%20\mathcal{D}_x,\,%20y%20\sim%20\pi_\theta(\cdot|x)}%20[%20\nabla_\theta%20\log%20\pi_\theta(y|x)%20\cdot%20r(x,%20y)%20]" alt="RL Policy Gradient">
+</p>
 
 ---
 
-## **3. 用重要性采样把SFT的梯度写成RL形式**
+## 3. 用重要性采样把SFT的梯度写成RL形式
 
-### **3.1 重新写SFT梯度**
+### 3.1 重新写SFT梯度
 
-我们希望把 SFT 梯度写成“采样于 $\pi_\theta$ 并带权重”的形式。
+SFT的期望是在 <img src="https://latex.codecogs.com/svg.latex?(x,%20y^*)%20\sim%20\mathcal{D}" style="vertical-align: middle;" alt=""> 上，但RL是在 <img src="https://latex.codecogs.com/svg.latex?(x,%20y)%20\sim%20\pi_\theta" style="vertical-align: middle;" alt=""> 上。我们希望把SFT的梯度也写成“采样于 <img src="https://latex.codecogs.com/svg.latex?\pi_\theta" style="vertical-align: middle;" alt=""> 并带权重”的形式。
 
-**关键技巧：** 重要性采样
+**关键技巧：**  
+用重要性采样重写：
 
-![Importance Sampling](https://latex.codecogs.com/svg.image?\mathbb{E}_{y^*&space;\sim&space;p^*}&space;[f(y^*)]&space;=&space;\mathbb{E}_{y&space;\sim&space;\pi_\theta}&space;\left[&space;\frac{p^*(y)}{\pi_\theta(y)}&space;f(y)&space;\right])
+<p align="center">
+  <img src="https://latex.codecogs.com/svg.latex?\mathbb{E}_{y^*%20\sim%20p^*}%20[f(y^*)]%20=%20\mathbb{E}_{y%20\sim%20\pi_\theta}%20\left[%20\frac{p^*(y)}{\pi_\theta(y)}%20f(y)%20\right]" alt="IS Trick">
+</p>
 
-在 SFT 中，可写为：
+在SFT里，<img src="https://latex.codecogs.com/svg.latex?p^*(y)" style="vertical-align: middle;" alt=""> 可以看作是“专家分布”，但数据集D是有限的离散点，所以我们可以写成：
 
-![SFT Gradient Rewritten](https://latex.codecogs.com/svg.image?\nabla_\theta&space;L_{\mathrm{SFT}}(\theta)&space;=&space;\mathbb{E}_{x&space;\sim&space;\mathcal{D}_x,\,&space;y&space;\sim&space;\pi_\theta(\cdot|x)}&space;\left[&space;\frac{1[y&space;=&space;y^*]}{\pi_\theta(y|x)}&space;\cdot&space;(&space;-\nabla_\theta&space;\log&space;\pi_\theta(y|x)&space;)&space;\right])
+<p align="center">
+  <img src="https://latex.codecogs.com/svg.latex?\mathbb{E}_{(x,%20y^*)%20\sim%20\mathcal{D}}%20[%20-\nabla_\theta%20\log%20\pi_\theta(y^*|x)%20]%20=%20\mathbb{E}_{x%20\sim%20\mathcal{D}_x}%20\mathbb{E}_{y%20\sim%20\pi_\theta(\cdot|x)}%20\left[%20\frac{1[y%20=%20y^*]}{\pi_\theta(y|x)}%20\cdot%20(%20-\nabla_\theta%20\log%20\pi_\theta(y|x)%20)%20\right]" alt="SFT IS expansion">
+</p>
 
-- $1[y = y^*]$：指示函数，仅当生成结果等于专家答案时为 1
+- <img src="https://latex.codecogs.com/svg.latex?1[y%20=%20y^*]" style="vertical-align: middle;" alt="1[y = y^*]">：指示函数，采样的 <img src="https://latex.codecogs.com/svg.latex?y" style="vertical-align: middle;" alt=""> 等于 <img src="https://latex.codecogs.com/svg.latex?y^*" style="vertical-align: middle;" alt=""> 时为1，否则为0
+
+**即**：
+
+<p align="center">
+  <img src="https://latex.codecogs.com/svg.latex?\nabla_\theta%20L_{\mathrm{SFT}}(\theta)%20=%20\mathbb{E}_{x%20\sim%20\mathcal{D}_x,\,%20y%20\sim%20\pi_\theta(\cdot|x)}%20\left[%20\frac{1[y%20=%20y^*]}{\pi_\theta(y|x)}%20\cdot%20(%20-\nabla_\theta%20\log%20\pi_\theta(y|x)%20)%20\right]" alt="SFT IS RL Form">
+</p>
 
 ---
 
-### **3.2 重新整理为RL策略梯度结构**
+### 3.2 重新整理为RL策略梯度结构
+
+我们可以对上式做如下整理：
 
 定义：
 
-- **隐式奖励**：![r(x,y)](https://latex.codecogs.com/svg.inline?r(x,%20y)%20=%20\mathbb{1}[y%20=%20y^*])
-- **重要性权重**：![w(y|x)](https://latex.codecogs.com/svg.inline?w(y|x)%20=%20\frac{1}{\pi_\theta(y|x)})
+- **隐式奖励**：<img src="https://latex.codecogs.com/svg.latex?r(x,%20y)%20=%201[y%20=%20y^*]" style="vertical-align: middle;" alt="">
+- **重要性权重**：<img src="https://latex.codecogs.com/svg.latex?w(y|x)%20=%20\frac{1}{\pi_\theta(y|x)}" style="vertical-align: middle;" alt="">
 
-则 SFT 梯度变为：
+则，上式等价于：
 
-![SFT as RL](https://latex.codecogs.com/svg.image?\nabla_\theta&space;L_{\mathrm{SFT}}(\theta)&space;=&space;-&space;\mathbb{E}_{x&space;\sim&space;\mathcal{D}_x,\,&space;y&space;\sim&space;\pi_\theta(\cdot|x)}&space;\left[&space;w(y|x)&space;\cdot&space;r(x,&space;y)&space;\cdot&space;\nabla_\theta&space;\log&space;\pi_\theta(y|x)&space;\right])
+<p align="center">
+  <img src="https://latex.codecogs.com/svg.latex?\nabla_\theta%20L_{\mathrm{SFT}}(\theta)%20=%20-%20\mathbb{E}_{x%20\sim%20\mathcal{D}_x,\,%20y%20\sim%20\pi_\theta(\cdot|x)}%20\left[%20w(y|x)%20\cdot%20r(x,%20y)%20\cdot%20\nabla_\theta%20\log%20\pi_\theta(y|x)%20\right]" alt="SFT as RL Policy Gradient">
+</p>
 
-即：SFT 等价于一种特殊形式的 RL，其奖励稀疏且受 $1/\pi_\theta$ 放大。
-
----
-
-## **4. SFT的“隐式奖励问题”分析**
-
-- 奖励：只有生成 $y^*$ 时 $r=1$，否则为 0
-- 权重：$\frac{1}{\pi_\theta(y^*|x)}$，若模型初始认为 $y^*$ 概率很低，则梯度被剧烈放大
-
-👉 这会导致：
-- 梯度爆炸
-- 训练不稳定
-- 泛化能力下降
+这就是将SFT的梯度**转化为RL策略梯度形式**，唯一的区别在于 <img src="https://latex.codecogs.com/svg.latex?r(x,%20y)" style="vertical-align: middle;" alt=""> 和 <img src="https://latex.codecogs.com/svg.latex?w(y|x)" style="vertical-align: middle;" alt=""> 的定义。
 
 ---
 
-## **5. DFT的修正：消除 $1/\pi_\theta$ 的影响**
+## 4. SFT的“隐式奖励问题”分析
+
+注意到：
+
+- <img src="https://latex.codecogs.com/svg.latex?w(y|x)%20=%20\frac{1}{\pi_\theta(y|x)}" style="vertical-align: middle;" alt="">
+- <img src="https://latex.codecogs.com/svg.latex?r(x,%20y)%20=%201[y%20=%20y^*]" style="vertical-align: middle;" alt="">
+
+即：**只有生成了专家答案 <img src="https://latex.codecogs.com/svg.latex?y^*" style="vertical-align: middle;" alt=""> 才有奖励1，否则为0，但这个奖励会被 <img src="https://latex.codecogs.com/svg.latex?1/\pi_\theta(y^*|x)" style="vertical-align: middle;" alt=""> 放大。**
+
+- 如果 <img src="https://latex.codecogs.com/svg.latex?\pi_\theta(y^*|x)" style="vertical-align: middle;" alt=""> 很小（模型原本不认为 <img src="https://latex.codecogs.com/svg.latex?y^*" style="vertical-align: middle;" alt=""> 是好答案），<img src="https://latex.codecogs.com/svg.latex?1/\pi_\theta(y^*|x)" style="vertical-align: middle;" alt=""> 就很大，导致梯度爆炸，优化不稳定，泛化变差。
+
+---
+
+## 5. DFT的修正：消除 <img src="https://latex.codecogs.com/svg.latex?1/\pi_\theta" style="vertical-align: middle;" alt=""> 的影响
 
 **核心思想：**  
-乘上 $\pi_\theta(y^*|x)$ 抵消 $1/\pi_\theta(y^*|x)$ 的放大效应，使用 `stop-gradient` 避免反向传播干扰。
+既然 <img src="https://latex.codecogs.com/svg.latex?1/\pi_\theta(y^*|x)" style="vertical-align: middle;" alt=""> 带来坏影响，直接在损失函数/梯度中乘以 <img src="https://latex.codecogs.com/svg.latex?\pi_\theta(y^*|x)" style="vertical-align: middle;" alt="">，即可将其“抵消”。
 
-### **5.1 修正后的梯度（DFT梯度）**
+### 5.1 修正后的梯度（DFT梯度）
 
-![DFT Gradient](https://latex.codecogs.com/svg.image?\nabla_\theta&space;L_{\mathrm{DFT}}(\theta)&space;=&space;\mathbb{E}_{(x,&space;y^*)&space;\sim&space;\mathcal{D}}&space;\left[&space;-&space;\text{sg}(&space;\pi_\theta(y^*|x)&space;)&space;\cdot&space;\nabla_\theta&space;\log&space;\pi_\theta(y^*|x)&space;\right])
+令：
 
-- $\text{sg}(\cdot)$：stop-gradient 算子（不参与反向传播）
+<p align="center">
+  <img src="https://latex.codecogs.com/svg.latex?\nabla_\theta%20L_{\mathrm{DFT}}(\theta)%20=%20\nabla_\theta%20L_{\mathrm{SFT}}(\theta)%20\cdot%20\text{sg}(\pi_\theta(y^*|x))" alt="DFT Gradient">
+</p>
 
-### **5.2 反推DFT的损失函数**
+- <img src="https://latex.codecogs.com/svg.latex?\text{sg}(\cdot)" style="vertical-align: middle;" alt="sg(.)">：stop-gradient 算子，表示这个项**不参与反向传播**，仅作为数值权重
 
-对应损失函数为：
+具体写法（展开）：
 
-![DFT Loss](https://latex.codecogs.com/svg.image?L_{\mathrm{DFT}}(\theta)&space;=&space;\mathbb{E}_{(x,&space;y^*)&space;\sim&space;\mathcal{D}}&space;\left[&space;-\,&space;\text{sg}(&space;\pi_\theta(y^*|x)&space;)&space;\cdot&space;\log&space;\pi_\theta(y^*|x)&space;\right])
+<p align="center">
+  <img src="https://latex.codecogs.com/svg.latex?\nabla_\theta%20L_{\mathrm{DFT}}(\theta)%20=%20\mathbb{E}_{(x,%20y^*)%20\sim%20\mathcal{D}}%20\left[-\text{sg}(\pi_\theta(y^*|x))%20\cdot%20\nabla_\theta%20\log%20\pi_\theta(y^*|x)\right]" alt="Expanded DFT Gradient">
+</p>
 
-### **5.3 Token-level DFT损失**
+### 5.2 反推DFT的损失函数
 
-推广到 token 序列：
+因为
 
-![Token-level DFT](https://latex.codecogs.com/svg.image?L_{\mathrm{DFT}}(\theta)&space;=&space;\mathbb{E}_{(x,&space;y^*)&space;\sim&space;\mathcal{D}}&space;\left[&space;-&space;\sum_{t=1}^{|y^*|}&space;\text{sg}(&space;\pi_\theta(y^*_t&space;|&space;y^*_{<t},&space;x)&space;)&space;\cdot&space;\log&space;\pi_\theta(y^*_t&space;|&space;y^*_{<t},&space;x)&space;\right])
+<p align="center">
+  <img src="https://latex.codecogs.com/svg.latex?\nabla_\theta%20\Big(%20-%20\text{sg}(\pi_\theta(y^*|x))%20\cdot%20\log%20\pi_\theta(y^*|x)%20\Big)%20=%20-%20\text{sg}(\pi_\theta(y^*|x))%20\cdot%20\nabla_\theta%20\log%20\pi_\theta(y^*|x)" alt="DFT Loss Derivation">
+</p>
 
-- $y^*_t$：第 $t$ 个 token
-- $y^*_{<t}$：前 $t-1$ 个 tokens
+所以，DFT的损失是：
+
+<p align="center">
+  <img src="https://latex.codecogs.com/svg.latex?L_{\mathrm{DFT}}(\theta)%20=%20\mathbb{E}_{(x,%20y^*)%20\sim%20\mathcal{D}}%20\left[-\text{sg}(\pi_\theta(y^*|x))%20\cdot%20\log%20\pi_\theta(y^*|x)\right]" alt="DFT Loss">
+</p>
+
+### 5.3 Token-level DFT损失
+
+NLP任务中答案通常是token序列，DFT在token级别推广为：
+
+<p align="center">
+  <img src="https://latex.codecogs.com/svg.latex?L_{\mathrm{DFT}}(\theta)%20=%20\mathbb{E}_{(x,%20y^*)%20\sim%20\mathcal{D}}%20\left[-%20\sum_{t=1}^{|y^*|}%20\text{sg}(\pi_\theta(y^*_t%20|%20y^*_{<t},%20x))%20\cdot%20\log%20\pi_\theta(y^*_t%20|%20y^*_{<t},%20x)\right]" alt="Token-level DFT Loss">
+</p>
+
+- <img src="https://latex.codecogs.com/svg.latex?y^*_t" style="vertical-align: middle;" alt="y^*_t">：专家答案的第 <img src="https://latex.codecogs.com/svg.latex?t" style="vertical-align: middle;" alt="t"> 个token
+- <img src="https://latex.codecogs.com/svg.latex?y^*_{<t}" style="vertical-align: middle;" alt="y^*_{<t}">：专家答案前 <img src="https://latex.codecogs.com/svg.latex?t-1" style="vertical-align: middle;" alt="t-1"> 个token
 
 ---
 
-## **6. 推导总结流程回顾**
+## 6. 推导总结流程回顾
 
-1. **SFT 的交叉熵损失与梯度**
-2. **用重要性采样重写 SFT 梯度到策略分布 $\pi_\theta$ 上**
-3. **发现 SFT 等价于一个奖励稀疏、被 $1/\pi_\theta$ 放大的 RL 过程**
-4. **分析该放大导致训练不稳定**
-5. **提出 DFT：引入 $\text{sg}(\pi_\theta)$ 抵消放大，稳定训练**
+1. **SFT的交叉熵损失与梯度**
+2. **用重要性采样把SFT梯度重写到模型策略分布**
+3. **发现SFT实际上等价于一个reward很稀疏、且被 <img src="https://latex.codecogs.com/svg.latex?1/\pi_\theta" style="vertical-align: middle;" alt=""> 放大权重的RL**
+4. **分析 <img src="https://latex.codecogs.com/svg.latex?1/\pi_\theta" style="vertical-align: middle;" alt=""> 带来的训练不稳定/泛化问题**
+5. **提出DFT：乘以 <img src="https://latex.codecogs.com/svg.latex?\pi_\theta" style="vertical-align: middle;" alt=""> 抵消这个放大，损失函数得到修正**
 
 ---
 
-## **最终公式总结**
+## 最终公式总结
 
 ### SFT损失与梯度
 
-![SFT Loss](https://latex.codecogs.com/svg.image?L_{\mathrm{SFT}}(\theta)&space;=&space;\mathbb{E}_{(x,&space;y^*)&space;\sim&space;\mathcal{D}}&space;\left[&space;-\log&space;\pi_\theta(y^*|x)&space;\right])
+<p align="center">
+  <img src="https://latex.codecogs.com/svg.latex?L_{\mathrm{SFT}}(\theta)%20=%20\mathbb{E}_{(x,%20y^*)%20\sim%20\mathcal{D}}%20\left[%20-\log%20\pi_\theta(y^*|x)%20\right]" alt="SFT Loss">
+</p>
 
-![SFT Grad](https://latex.codecogs.com/svg.image?\nabla_\theta&space;L_{\mathrm{SFT}}(\theta)&space;=&space;\mathbb{E}_{(x,&space;y^*)&space;\sim&space;\mathcal{D}}&space;\left[-\nabla_\theta\log&space;\pi_\theta(y^*|x)\right])
+<p align="center">
+  <img src="https://latex.codecogs.com/svg.latex?\nabla_\theta%20L_{\mathrm{SFT}}(\theta)%20=%20\mathbb{E}_{(x,%20y^*)%20\sim%20\mathcal{D}}%20\left[-\nabla_\theta\log%20\pi_\theta(y^*|x)\right]" alt="SFT Loss Gradient">
+</p>
 
 ### RL策略梯度
 
-![RL PG](https://latex.codecogs.com/svg.image?\nabla_\theta&space;J(\theta)&space;=&space;\mathbb{E}_{x&space;\sim&space;\mathcal{D}_x,\,&space;y&space;\sim&space;\pi_\theta(\cdot|x)}&space;[&space;\nabla_\theta&space;\log&space;\pi_\theta(y|x)&space;\cdot&space;r(x,&space;y)&space;])
+<p align="center">
+  <img src="https://latex.codecogs.com/svg.latex?\nabla_\theta%20J(\theta)%20=%20\mathbb{E}_{x%20\sim%20\mathcal{D}_x,\,%20y%20\sim%20\pi_\theta(\cdot|x)}%20[%20\nabla_\theta%20\log%20\pi_\theta(y|x)%20\cdot%20r(x,%20y)%20]" alt="RL Policy Gradient">
+</p>
 
 ### 用重要性采样重写SFT梯度
 
-![SFT as IS](https://latex.codecogs.com/svg.image?\nabla_\theta&space;L_{\mathrm{SFT}}(\theta)&space;=&space;-&space;\mathbb{E}_{x&space;\sim&space;\mathcal{D}_x,\,&space;y&space;\sim&space;\pi_\theta(\cdot|x)}&space;\left[&space;\frac{1[y&space;=&space;y^*]}{\pi_\theta(y|x)}&space;\nabla_\theta&space;\log&space;\pi_\theta(y|x)&space;\right])
+<p align="center">
+  <img src="https://latex.codecogs.com/svg.latex?\nabla_\theta%20L_{\mathrm{SFT}}(\theta)%20=%20-%20\mathbb{E}_{x%20\sim%20\mathcal{D}_x,\,%20y%20\sim%20\pi_\theta(\cdot|x)}%20\left[%20\frac{1[y%20=%20y^*]}{\pi_\theta(y|x)}%20\nabla_\theta%20\log%20\pi_\theta(y|x)%20\right]" alt="SFT RL Form">
+</p>
 
 ### DFT损失（token-level，论文公式9）
 
-![DFT Final](https://latex.codecogs.com/svg.image?L_{\mathrm{DFT}}(\theta)&space;=&space;\mathbb{E}_{(x,&space;y^*)&space;\sim&space;\mathcal{D}}&space;\left[&space;-&space;\sum_{t=1}^{|y^*|}&space;\text{sg}(&space;\pi_\theta(y^*_t&space;|&space;y^*_{<t},&space;x)&space;)&space;\cdot&space;\log&space;\pi_\theta(y^*_t&space;|&space;y^*_{<t},&space;x)&space;\right])
+<p align="center">
+  <img src="https://latex.codecogs.com/svg.latex?L_{\mathrm{DFT}}(\theta)%20=%20\mathbb{E}_{(x,%20y^*)%20\sim%20\mathcal{D}}%20\left[-%20\sum_{t=1}^{|y^*|}%20\text{sg}(\pi_\theta(y^*_t%20|%20y^*_{<t},%20x))%20\cdot%20\log%20\pi_\theta(y^*_t%20|%20y^*_{<t},%20x)\right]" alt="DFT Token Loss">
+</p>
 
-> 其中 $\text{sg}(\cdot)$ 表示 stop-gradient，权重不参与反向传播。
+> 其中 <img src="https://latex.codecogs.com/svg.latex?\text{sg}(\cdot)" style="vertical-align: middle;" alt="sg(.)"> 表明权重处不参与梯度计算。
 
 
 
