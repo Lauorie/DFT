@@ -229,6 +229,8 @@ with torch.no_grad():
 # 2. 根据 p_correct 和 dft_alpha 计算损失权重
 # 当 p_correct -> 1 (模型很自信), dft_weight -> 1
 # 当 p_correct -> 0 (模型不自信), dft_weight -> (1 - dft_alpha)
+# p_correct 高 ⇒ 权重高 ⇒ 强化“容易/已学会”的 token（类似 self-paced 但偏向易样本）
+# p_correct 低 ⇒ 权重低 ⇒ 削弱难样本的梯度
 dft_weight = p_correct * self.dft_alpha + (1 - self.dft_alpha)
 
 # 3. 将权重应用到原始损失上
