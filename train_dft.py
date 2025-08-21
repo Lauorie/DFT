@@ -8,6 +8,9 @@ from typing import List, Optional
 import torch.distributed as dist
 from contextlib import contextmanager
 import traceback
+import numpy as np
+import shutil
+import re
 
 import transformers
 from transformers import (
@@ -113,6 +116,12 @@ class DFTTrainer(Trainer):
         self.is_main_process = self.args.local_rank <= 0
         # 统一保存策略：使用 transformers 内置 TrainingArguments.save_only_model
         self.save_only_model = bool(getattr(self.args, "save_only_model", False))
+        # 手动最优指标与checkpoint跟踪（兼容 DeepSpeed + save_only_model 禁用 load_best_model_at_end 的场景）
+        self.best_metric_name = getattr(self.args, "metric_for_best_model", "eval_loss")
+        self.greater_is_better = getattr(self.args, "greater_is_better", False)
+        self._tracked_best_metric = None
+        self._tracked_best_checkpoint = None
+        self._ckpt_paths_by_step = {}
         
         if not self.is_main_process:
             hf_logging.set_verbosity_error()
@@ -126,9 +135,36 @@ class DFTTrainer(Trainer):
         checkpoint_folder = f"checkpoint-{self.state.global_step}"
         output_dir = os.path.join(self.args.output_dir, checkpoint_folder)
         os.makedirs(output_dir, exist_ok=True)
+        # 记录本步checkpoint目录
+        try:
+            self._ckpt_paths_by_step[int(self.state.global_step)] = output_dir
+        except Exception:
+            pass
         
         # 使用内部 _save，确保兼容 deepspeed/fp16 等场景
         self._save(output_dir)
+        # 同步保存 TrainerState，供 _rotate_checkpoints 与最优模型选择使用
+        try:
+            if self.is_world_process_zero():
+                # 兼容不同版本 transformers：直接写 trainer_state.json
+                self.state.save_to_json(os.path.join(output_dir, "trainer_state.json"))
+        except Exception:
+            pass
+        
+        # 在保存时若拿到评估指标，手动更新最优
+        try:
+            if isinstance(metrics, dict):
+                metric_value = None
+                if self.best_metric_name in metrics:
+                    metric_value = metrics[self.best_metric_name]
+                else:
+                    alt_key = self.best_metric_name if self.best_metric_name.startswith("eval_") else f"eval_{self.best_metric_name}"
+                    if alt_key in metrics:
+                        metric_value = metrics[alt_key]
+                if metric_value is not None:
+                    self._update_best_from_metric(int(self.state.global_step), float(metric_value))
+        except Exception:
+            pass
         
         # 保存 tokenizer
         if self.tokenizer is not None:
@@ -137,15 +173,96 @@ class DFTTrainer(Trainer):
             except Exception:
                 pass
         
-        # 轮转旧 checkpoint
+        # 轮转旧 checkpoint（强制保留最佳checkpoint）
         try:
-            # 不同版本签名不同，优先无参调用
-            self._rotate_checkpoints()
-        except TypeError:
+            self._rotate_checkpoints_keep_best()
+        except Exception:
+            pass
+
+    def log(self, logs: dict, *args, **kwargs) -> None:
+        """拦截日志，在出现 eval 指标时手动更新最优checkpoint。"""
+        super().log(logs, *args, **kwargs)
+        try:
+            if not isinstance(logs, dict):
+                return
+            metric_value = None
+            if self.best_metric_name in logs:
+                metric_value = logs[self.best_metric_name]
+            else:
+                alt_key = self.best_metric_name if self.best_metric_name.startswith("eval_") else f"eval_{self.best_metric_name}"
+                if alt_key in logs:
+                    metric_value = logs[alt_key]
+            if metric_value is not None:
+                self._update_best_from_metric(int(self.state.global_step), float(metric_value))
+        except Exception:
+            pass
+
+    def _update_best_from_metric(self, step: int, metric_value: float) -> None:
+        is_better = (
+            self._tracked_best_metric is None
+            or (self.greater_is_better and metric_value > self._tracked_best_metric)
+            or (not self.greater_is_better and metric_value < self._tracked_best_metric)
+        )
+        if not is_better:
+            return
+        self._tracked_best_metric = float(metric_value)
+        best_path = self._ckpt_paths_by_step.get(step, os.path.join(self.args.output_dir, f"checkpoint-{step}"))
+        self._tracked_best_checkpoint = best_path
+        # 同步到 TrainerState
+        self.state.best_metric = float(metric_value)
+        self.state.best_model_checkpoint = best_path
+        try:
+            if os.path.isdir(best_path):
+                with open(os.path.join(best_path, "BEST"), "w", encoding="utf-8") as f:
+                    f.write(f"{self.best_metric_name}={self._tracked_best_metric}\n")
+        except Exception:
+            pass
+
+    def _rotate_checkpoints_keep_best(self):
+        """自定义轮转：遵循 save_total_limit，且永不删除最优 checkpoint。"""
+        save_total_limit = getattr(self.args, "save_total_limit", None)
+        if save_total_limit is None or save_total_limit <= 0:
+            return
+
+        output_dir = Path(self.args.output_dir)
+        if not output_dir.exists():
+            return
+
+        ckpt_dirs = []
+        pattern = re.compile(r"^checkpoint-(\d+)$")
+        for item in output_dir.iterdir():
+            if item.is_dir():
+                m = pattern.match(item.name)
+                if m:
+                    step = int(m.group(1))
+                    ckpt_dirs.append((step, item))
+
+        if len(ckpt_dirs) <= save_total_limit:
+            return
+
+        # 按 step 升序（最老在前）
+        ckpt_dirs.sort(key=lambda x: x[0])
+
+        best_ckpt = getattr(self.state, "best_model_checkpoint", None)
+        best_path = Path(best_ckpt).resolve() if best_ckpt else None
+
+        # 需要保留：最优（若存在）+ 最新的若干个直到总数等于 save_total_limit
+        keep_paths = set()
+        if best_path is not None:
+            keep_paths.add(best_path)
+        remaining = save_total_limit - len(keep_paths)
+        if remaining > 0:
+            for _, p in ckpt_dirs[-remaining:]:
+                keep_paths.add(p.resolve())
+
+        for _, path in ckpt_dirs:
+            if path.resolve() in keep_paths:
+                continue
             try:
-                self._rotate_checkpoints(use_mtime=False)
-            except Exception:
-                pass
+                shutil.rmtree(path)
+                dist_logger.info(f"轮转删除checkpoint: {path}")
+            except Exception as e:
+                dist_logger.warning(f"删除checkpoint失败 {path}: {e}")
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         """完全修复的compute_loss，确保维度匹配"""
@@ -317,9 +434,9 @@ class DataProcessor:
         
         if self.is_main_process and self.process_stats["total"] % 100 == 0:
             dist_logger.info(
-                f"处理进度: 总计 {self.process_stats['total']}, "
-                f"成功 {self.process_stats['success']}, "
-                f"失败 {self.process_stats['failed']}"
+                f"Processing Data: total {self.process_stats['total']}, "
+                f"Success: {self.process_stats['success']}, "
+                f"Failed: {self.process_stats['failed']}"
             )
         
         return model_inputs
@@ -394,6 +511,67 @@ class DataProcessor:
                 dist_logger.debug(f"处理对话错误: {str(e)[:200]}")
             return None
 
+# --- 评估指标：token级别准确率 ---
+def compute_token_level_accuracy(eval_pred):
+    predictions = eval_pred.predictions
+    labels = eval_pred.label_ids
+
+    # 统一转为批次列表以降低内存并兼容不拼接场景
+    if isinstance(predictions, tuple):
+        predictions = predictions[0]
+
+    # labels 也可能是列表
+    if isinstance(predictions, (list, tuple)):
+        pred_batches = predictions
+        label_batches = labels if isinstance(labels, (list, tuple)) else [labels] * len(pred_batches)
+        total_correct = 0
+        total_valid = 0
+        for p, l in zip(pred_batches, label_batches):
+            if isinstance(p, tuple):
+                p = p[0]
+            if p.ndim == 3:  # logits
+                p = np.argmax(p, axis=-1)
+            # 对齐
+            if p.ndim == 2 and l.ndim == 2:
+                p_shift = p[:, :-1]
+                l_shift = l[:, 1:]
+            else:
+                p_shift = p
+                l_shift = l
+            mask = l_shift != -100
+            total_valid += int(mask.sum())
+            total_correct += int(((p_shift == l_shift) & mask).sum())
+        acc = 0.0 if total_valid == 0 else total_correct / total_valid
+        return {"acc": float(acc)}
+
+    # 非列表：numpy数组
+    if predictions.ndim == 3:
+        pred_ids = np.argmax(predictions, axis=-1)
+    else:
+        pred_ids = predictions
+
+    if pred_ids.ndim == 2 and labels.ndim == 2:
+        pred_shift = pred_ids[:, :-1]
+        labels_shift = labels[:, 1:]
+    else:
+        pred_shift = pred_ids
+        labels_shift = labels
+
+    mask = labels_shift != -100
+    valid = mask.sum()
+    if valid == 0:
+        return {"acc": 0.0}
+    correct = (pred_shift == labels_shift) & mask
+    acc = float(correct.sum() / valid)
+    return {"acc": acc}
+
+# 在评估阶段即时压缩logits，避免累计巨大三维张量
+def preprocess_logits_for_metrics(logits, labels):
+    if isinstance(logits, tuple):
+        logits = logits[0]
+    # 直接返回 argmax 的 token ids (int32)，大幅降低内存
+    return torch.argmax(logits, dim=-1).to(torch.int32)
+
 # --- 主函数 ---
 def setup_distributed_logging():
     if dist.is_initialized():
@@ -411,6 +589,24 @@ def setup_model_and_tokenizer(model_args: ModelArguments):
         trust_remote_code=model_args.trust_remote_code,
         use_fast=True
     )
+    # 强制使用不包含 <think> 注入的模板，避免模型在训练时学习到无意义的思维标签
+    try:
+        clean_tpl_path = os.path.join(os.path.dirname(__file__).rsplit('/', 1)[0], 'no_think_chat_template.jinja')
+        if os.path.exists(clean_tpl_path):
+            with open(clean_tpl_path, 'r', encoding='utf-8') as f:
+                tokenizer.chat_template = f.read()
+            dist_logger.info("已应用干净模板: no_think_chat_template.jinja")
+        else:
+            # 兼容直接运行目录为 DFT-Train/ 的情况
+            alt_path = os.path.join(os.path.dirname(__file__), 'no_think_chat_template.jinja')
+            if os.path.exists(alt_path):
+                with open(alt_path, 'r', encoding='utf-8') as f:
+                    tokenizer.chat_template = f.read()
+                dist_logger.info("已应用干净模板: no_think_chat_template.jinja (alt)")
+            else:
+                dist_logger.warning("未找到 no_think_chat_template.jinja，继续使用默认模板")
+    except Exception as e:
+        dist_logger.warning(f"应用干净模板失败: {e}")
     
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -527,6 +723,24 @@ def main():
     else:
         training_args.eval_strategy = "no"
     
+    # 确保保存最优模型与指标选择生效
+    if training_args.eval_strategy != "no":
+        # 若用户未指定，则默认使用 eval_acc 作为最佳指标（存在 compute_metrics）
+        if not getattr(training_args, "metric_for_best_model", None):
+            training_args.metric_for_best_model = "eval_acc"
+        if getattr(training_args, "greater_is_better", None) is None:
+            training_args.greater_is_better = True
+        # 处理 DeepSpeed + save_only_model 与 load_best_model_at_end 的冲突
+        has_deepspeed = bool(getattr(training_args, "deepspeed", None))
+        save_only_model = bool(getattr(training_args, "save_only_model", False))
+        if has_deepspeed and save_only_model:
+            if getattr(training_args, "load_best_model_at_end", False):
+                dist_logger.warning("DeepSpeed 与 save_only_model 同时使用，将禁用 load_best_model_at_end，由自定义逻辑跟踪最优checkpoint。")
+            training_args.load_best_model_at_end = False
+        else:
+            if not getattr(training_args, "load_best_model_at_end", False):
+                training_args.load_best_model_at_end = True
+    
     try:
         model, tokenizer = setup_model_and_tokenizer(model_args)
         
@@ -541,6 +755,14 @@ def main():
         if training_args.local_rank > 0:
             training_args.report_to = []
         
+        # 评估阶段内存优化：不拼接logits，启用低精度评估，限制累计步数
+        if hasattr(training_args, "eval_do_concat_logits"):
+            training_args.eval_do_concat_logits = False
+        if hasattr(training_args, "bf16") and training_args.bf16:
+            setattr(training_args, "bf16_full_eval", True)
+        if not getattr(training_args, "eval_accumulation_steps", 0):
+            training_args.eval_accumulation_steps = 1
+
         # 创建trainer
         trainer = DFTTrainer(
             model=model,
@@ -548,6 +770,8 @@ def main():
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
+            compute_metrics=compute_token_level_accuracy,
+            preprocess_logits_for_metrics=preprocess_logits_for_metrics,
             dft_alpha=dft_args.dft_alpha,
             log_metrics_steps=logging_args.log_metrics_steps,
             use_simple_dft=dft_args.use_simple_dft,
@@ -559,15 +783,33 @@ def main():
             ),
         )
 
-        dist_logger.info(f"开始训练 - DFT alpha={dft_args.dft_alpha}")
+        dist_logger.info(f"Start training - DFT alpha={dft_args.dft_alpha}")
         trainer.train()
         
+        # 训练完成后输出最优 checkpoint 信息
+        try:
+            best_ckpt = getattr(trainer.state, "best_model_checkpoint", None)
+            best_metric = getattr(trainer.state, "best_metric", None)
+            metric_name = getattr(training_args, "metric_for_best_model", "eval_loss")
+            if best_ckpt is not None:
+                dist_logger.info(f"Training completed, best checkpoint: {best_ckpt} | {metric_name}={best_metric}")
+            else:
+                dist_logger.warning("Training completed, but no best checkpoint information (possibly no evaluation or no evaluation strategy)")
+        except Exception:
+            pass
+
         trainer.save_model(training_args.output_dir)
-        dist_logger.info(f"模型已保存: {training_args.output_dir}")
+        # 确保将已应用的 chat_template 一并保存，供推理阶段加载
+        try:
+            tokenizer.save_pretrained(training_args.output_dir)
+            dist_logger.info(f"Tokenizer saved: {training_args.output_dir}")
+        except Exception as e:
+            dist_logger.warning(f"Failed to save tokenizer: {e}")
+        dist_logger.info(f"Model saved: {training_args.output_dir}")
         
     except Exception as e:
-        dist_logger.error(f"训练失败: {e}")
-        dist_logger.error(f"详情: {traceback.format_exc()}")
+        dist_logger.error(f"Training failed: {e}")
+        dist_logger.error(f"Details: {traceback.format_exc()}")
         raise
 
 if __name__ == "__main__":
